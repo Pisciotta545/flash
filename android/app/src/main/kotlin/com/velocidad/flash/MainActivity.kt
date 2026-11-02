@@ -77,12 +77,20 @@ class MainActivity : FlutterActivity() {
                             result.error("ARGS", "uris es obligatorio", null)
                             return@setMethodCallHandler
                         }
-                        try {
-                            shareFiles(uris, mime, asDocument)
-                            result.success(true)
-                        } catch (e: Exception) {
-                            result.error("SHARE_FAILED", e.message, null)
-                        }
+                        // Copiar a caché puede tardar (archivos grandes): en un hilo
+                        // aparte para no bloquear la UI. startActivity y result van en
+                        // el hilo principal.
+                        Thread {
+                            try {
+                                val intent = buildShareIntent(uris, mime, asDocument)
+                                runOnUiThread {
+                                    startActivity(intent)
+                                    result.success(true)
+                                }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("SHARE_FAILED", e.message, null) }
+                            }
+                        }.start()
                     }
                     // G5 (auto-actualizador): abre el instalador del sistema sobre el
                     // APK descargado. Requiere el permiso REQUEST_INSTALL_PACKAGES.
@@ -281,22 +289,31 @@ class MainActivity : FlutterActivity() {
         return FileProvider.getUriForFile(this, authority, File(s))
     }
 
-    private fun shareFiles(uris: List<String>, mime: String, asDocument: Boolean) {
+    /// Construye el Intent de compartir. Cada archivo se materializa en la caché
+    /// (con su nombre/extensión real) y se expone vía FileProvider. Así:
+    ///  - Modo normal: el FileProvider reporta el MIME real (por la extensión) →
+    ///    CapCut y otros editores reconocen el archivo.
+    ///  - Modo documento: se usa un FileProvider propio (DocFileProvider) que
+    ///    reporta "application/octet-stream" → WhatsApp lo envía como documento,
+    ///    sin comprimir.
+    private fun buildShareIntent(uris: List<String>, mime: String, asDocument: Boolean): Intent {
+        val authority = if (asDocument) {
+            "${applicationContext.packageName}.docprovider"
+        } else {
+            "${applicationContext.packageName}.fileprovider"
+        }
+
         val resolved = ArrayList<Uri>()
         for (s in uris) {
             try {
-                // Las rutas de archivo que ya no existen se descartan (p. ej. un
-                // envío cuyo origen en caché fue borrado por el sistema).
-                if (!s.startsWith("content://") && !File(s).exists()) continue
-                resolved.add(toShareableUri(s))
+                val file = materializeForShare(s) ?: continue
+                resolved.add(FileProvider.getUriForFile(this, authority, file))
             } catch (_: Exception) {
-                // Ignorar el que no se pueda resolver.
+                // Ignorar el que no se pueda preparar.
             }
         }
         if (resolved.isEmpty()) throw IllegalStateException("No hay archivos disponibles para compartir")
 
-        // Modo documento: MIME genérico → WhatsApp (y otras) lo mandan como archivo
-        // sin comprimir. Modo normal: el MIME real → CapCut y editores lo reconocen.
         val type = if (asDocument) "application/octet-stream" else mime
 
         val intent = if (resolved.size == 1) {
@@ -313,7 +330,42 @@ class MainActivity : FlutterActivity() {
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         val chooser = Intent.createChooser(intent, "Compartir con…")
         chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        startActivity(chooser)
+        return chooser
+    }
+
+    /// Devuelve un File (en caché) listo para compartir vía FileProvider.
+    ///  - content:// (MediaStore/SAF): se copia a caché con su nombre real.
+    ///  - ruta de archivo: se usa tal cual (si existe).
+    private fun materializeForShare(s: String): File? {
+        if (!s.startsWith("content://")) {
+            val f = File(s)
+            return if (f.exists()) f else null
+        }
+        val uri = Uri.parse(s)
+        val name = queryDisplayName(uri) ?: "archivo_${System.currentTimeMillis()}"
+        val dir = File(cacheDir, "share_cache").apply { mkdirs() }
+        val safe = name.replace('/', '_').replace('\\', '_')
+        val out = File(dir, safe)
+        applicationContext.contentResolver.openInputStream(uri)?.use { input ->
+            java.io.FileOutputStream(out).use { output -> input.copyTo(output, 1 shl 16) }
+        } ?: return null
+        return out
+    }
+
+    /// Nombre visible (con extensión) de un content:// vía OpenableColumns.
+    private fun queryDisplayName(uri: Uri): String? {
+        return try {
+            applicationContext.contentResolver.query(
+                uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null
+            )?.use { c ->
+                if (c.moveToFirst()) {
+                    val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0) c.getString(idx)?.takeIf { it.isNotEmpty() } else null
+                } else null
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun installApk(path: String) {

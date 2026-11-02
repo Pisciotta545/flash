@@ -68,6 +68,18 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_provider_paths" />
         </provider>
+
+        <!-- G4: FileProvider que reporta tipo genérico, para "compartir como
+             documento" (WhatsApp lo manda como archivo, sin comprimir). -->
+        <provider
+            android:name=".DocFileProvider"
+            android:authorities="${applicationId}.docprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_provider_paths" />
+        </provider>
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
