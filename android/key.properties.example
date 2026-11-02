@@ -1,0 +1,16 @@
+# PLANTILLA — copiá este archivo como "key.properties" (sin .example) y completá
+# tus datos reales. NUNCA subas key.properties ni el .jks a ningún repositorio.
+#
+# 1) Generá el keystore (una sola vez, guardalo a buen resguardo: si se pierde,
+#    NO podés volver a actualizar la app en Play):
+#
+#    keytool -genkey -v -keystore flash-release.jks -keyalg RSA -keysize 2048 \
+#            -validity 10000 -alias flash
+#
+# 2) Poné la ruta al .jks en storeFile (ruta absoluta o relativa a android/app/).
+# 3) Activá además "Play App Signing" en Play Console (recomendado).
+
+storePassword=TU_PASSWORD_DEL_STORE
+keyPassword=TU_PASSWORD_DE_LA_CLAVE
+keyAlias=flash
+storeFile=../flash-release.jks
