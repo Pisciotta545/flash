@@ -73,6 +73,9 @@ class MainActivity : FlutterActivity() {
                         // G4: "como documento" fuerza un MIME genérico para que apps
                         // como WhatsApp lo envíen como archivo (sin comprimir).
                         val asDocument = call.argument<Boolean>("asDocument") ?: false
+                        // Nombres reales con extensión (uno por URI); evita el .bin y el
+                        // "archivo no compatible" cuando MediaStore no trae la extensión.
+                        val names = call.argument<List<String>>("names") ?: emptyList()
                         if (uris == null || uris.isEmpty()) {
                             result.error("ARGS", "uris es obligatorio", null)
                             return@setMethodCallHandler
@@ -82,7 +85,7 @@ class MainActivity : FlutterActivity() {
                         // el hilo principal.
                         Thread {
                             try {
-                                val intent = buildShareIntent(uris, mime, asDocument)
+                                val intent = buildShareIntent(uris, names, mime, asDocument)
                                 runOnUiThread {
                                     startActivity(intent)
                                     result.success(true)
@@ -296,7 +299,12 @@ class MainActivity : FlutterActivity() {
     ///  - Modo documento: se usa un FileProvider propio (DocFileProvider) que
     ///    reporta "application/octet-stream" → WhatsApp lo envía como documento,
     ///    sin comprimir.
-    private fun buildShareIntent(uris: List<String>, mime: String, asDocument: Boolean): Intent {
+    private fun buildShareIntent(
+        uris: List<String>,
+        names: List<String>,
+        mime: String,
+        asDocument: Boolean
+    ): Intent {
         val authority = if (asDocument) {
             "${applicationContext.packageName}.docprovider"
         } else {
@@ -304,9 +312,10 @@ class MainActivity : FlutterActivity() {
         }
 
         val resolved = ArrayList<Uri>()
-        for (s in uris) {
+        for (i in uris.indices) {
             try {
-                val file = materializeForShare(s) ?: continue
+                val wanted = names.getOrNull(i)
+                val file = materializeForShare(uris[i], wanted) ?: continue
                 resolved.add(FileProvider.getUriForFile(this, authority, file))
             } catch (_: Exception) {
                 // Ignorar el que no se pueda preparar.
@@ -336,13 +345,23 @@ class MainActivity : FlutterActivity() {
     /// Devuelve un File (en caché) listo para compartir vía FileProvider.
     ///  - content:// (MediaStore/SAF): se copia a caché con su nombre real.
     ///  - ruta de archivo: se usa tal cual (si existe).
-    private fun materializeForShare(s: String): File? {
+    /// [preferredName] es el nombre con extensión que manda Flutter; tiene
+    /// prioridad porque MediaStore a veces devuelve el nombre sin extensión.
+    private fun materializeForShare(s: String, preferredName: String?): File? {
         if (!s.startsWith("content://")) {
             val f = File(s)
             return if (f.exists()) f else null
         }
         val uri = Uri.parse(s)
-        val name = queryDisplayName(uri) ?: "archivo_${System.currentTimeMillis()}"
+        var name = preferredName?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: queryDisplayName(uri)
+            ?: "archivo_${System.currentTimeMillis()}"
+        // Garantizar una extensión (si falta, derivarla del tipo real del URI).
+        if (!name.contains('.')) {
+            val ext = MimeTypeMap.getSingleton()
+                .getExtensionFromMimeType(applicationContext.contentResolver.getType(uri) ?: "")
+            if (!ext.isNullOrEmpty()) name = "$name.$ext"
+        }
         val dir = File(cacheDir, "share_cache").apply { mkdirs() }
         val safe = name.replace('/', '_').replace('\\', '_')
         val out = File(dir, safe)

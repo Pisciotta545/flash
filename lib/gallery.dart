@@ -201,6 +201,9 @@ class GalleryStore {
     final mime = items.length == 1 ? items.first.mime : '*/*';
     await _galleryChannel.invokeMethod('shareFiles', {
       'uris': items.map((e) => e.uri).toList(),
+      // Nombre real (con extensión) de cada archivo: MediaStore a veces no la
+      // devuelve, y sin extensión CapCut no lo reconoce y WhatsApp lo nombra .bin.
+      'names': items.map((e) => e.name).toList(),
       'mime': mime,
       'asDocument': asDocument,
     });
